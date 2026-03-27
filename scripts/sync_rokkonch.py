@@ -4,27 +4,82 @@ import sqlite3
 from pathlib import Path
 
 # パスの設定
-RKKONCH_BACKUP = Path.home() / "openclaw-backup-20260328.tar.gz"
-LOCAL_DB_PATH = "/var/git/openclaw-configs/tweets.db"
-BACKUP_DB_PATH = "/var/git/openclaw-configs/tweets_backup.db"
+LOCAL_DB_PATH = Path.home() / ".openclaw-vps-manager" / "tweets.db"
+BACKUP_DB_PATH = Path.home() / ".openclaw-vps-manager" / "tweets_backup.db"
+RKKONCH_REMOTE_BACKUP = "~/openclaw-backup-20260328.tar.gz"
 
 
 async def import_tweets_to_db(db_path: str, tweets: list, tweet_type: str):
+    """Import tweets to SQLite database."""
     print(f"Importing {len(tweets)} tweets (type: {tweet_type})...")
-    
-    count = 0
+
+    if not tweets:
+        print("  No tweets to import")
+        return 0
+
+    # Ensure database directory exists
+    db_path_obj = Path(db_path)
+    db_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+    # Connect to database
+    conn = sqlite3.connect(str(db_path_obj))
+    cursor = conn.cursor()
+
+    # Create table if not exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tweets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tweet_id TEXT UNIQUE,
+            tweet_type TEXT NOT NULL,
+            content TEXT,
+            user TEXT,
+            created_at TEXT,
+            scraped_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Insert tweets
+    imported_count = 0
+    skipped_count = 0
+
     for tweet in tweets:
-        print(f"  - Tweet ID: {tweet.get('id')}")
-        count += 1
-    
-    return count
+        tweet_id = tweet.get('id')
+        if not tweet_id:
+            continue
+
+        content = tweet.get('content', '')
+        user = tweet.get('username', '')
+        created_at = tweet.get('timestamp', '')
+
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO tweets (tweet_id, tweet_type, content, user, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (tweet_id, tweet_type, content, user, created_at))
+
+            if cursor.rowcount > 0:
+                imported_count += 1
+                if imported_count % 100 == 0:
+                    print(f"  Progress: {imported_count} tweets imported")
+            else:
+                skipped_count += 1
+        except sqlite3.Error as e:
+            print(f"  Error importing tweet {tweet_id}: {e}")
+            continue
+
+    conn.commit()
+    conn.close()
+
+    print(f"  ✓ {imported_count} tweets imported, {skipped_count} skipped (duplicates)")
+    return imported_count
 
 
 async def sync_from_rkkonch():
     import subprocess
     
     print("=== rokkonch 同期開始 ===")
-    print(f"実行日時: {asyncio.get_event_loop().time().strftime('%Y-%m-%d %H:%M:%S')}")
+    from datetime import datetime
+    print(f"実行日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("")
     
     # ステップ1: rokkonch の生存確認
@@ -105,13 +160,13 @@ async def sync_from_rkkonch():
     
     try:
         result = subprocess.run(
-            ["ssh", "rokkonch", "tar", "-czf", str(RKKONCH_BACKUP), "-C", "~/.openclaw/workspace/", "skills"],
+            ["ssh", "rokkonch", "tar", "-czf", RKKONCH_REMOTE_BACKUP, "-C", "~/.openclaw/workspace/", "skills"],
             capture_output=True,
             timeout=60
         )
-        
+
         if result.returncode == 0:
-            print(f"     ✓ バックアップを作成しました")
+            print(f"     ✓ リモートバックアップを作成しました: {RKKONCH_REMOTE_BACKUP}")
         else:
             print(f"     ✗ バックアップ作成エラー: {result.stderr}")
             return False

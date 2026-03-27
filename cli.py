@@ -597,6 +597,47 @@ def resolve_sync_conflict(
 
 
 @app.command()
+def sync_data(
+    hostname: str = typer.Argument(..., help="VPS hostname (as configured in SSH config)"),
+    db_path: str = typer.Option(None, "--db-path", help="Local database path"),
+    no_backup: bool = typer.Option(False, "--no-backup", help="Skip creating backup of skills directory"),
+    workspace_dir: str = typer.Option("~/.openclaw/workspace", "--workspace-dir", help="Remote workspace directory"),
+):
+    """Sync OpenClaw data from VPS instance (tweets, skills, etc)."""
+    import subprocess
+    import sys
+
+    script_path = Path(__file__).parent / "scripts" / "sync_vps.py"
+
+    if not script_path.exists():
+        console.print(f"[red]Sync script not found: {script_path}[/red]")
+        raise typer.Exit(1)
+
+    # Build command arguments
+    cmd = ["python3", str(script_path), hostname]
+
+    if db_path:
+        cmd.extend(["--db-path", db_path])
+    if no_backup:
+        cmd.append("--no-backup")
+    if workspace_dir != "~/.openclaw/workspace":
+        cmd.extend(["--workspace-dir", workspace_dir])
+
+    console.print(f"[bold]Starting data sync from {hostname}...[/bold]")
+    console.print(f"Script: {script_path}")
+    console.print()
+
+    # Run the sync script
+    result = subprocess.run(cmd, capture_output=False)
+
+    if result.returncode != 0:
+        console.print(f"[red]Sync failed with exit code {result.returncode}[/red]")
+        raise typer.Exit(result.returncode)
+    else:
+        console.print(f"[bold green]✓ Data sync completed successfully![/bold green]")
+
+
+@app.command()
 def completion(
     shell: str = typer.Argument(..., help="Shell type (bash, zsh, fish)"),
     show_path: bool = typer.Option(False, "--show-path", help="Show the path to completion script"),
