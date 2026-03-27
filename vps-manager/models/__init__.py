@@ -1,5 +1,5 @@
 """Database models for VPS Manager."""
-from database import Base, User, Customer, VPSServer, Deployment, AuditLog, UserRole, VPSStatus, DeploymentStatus
+from database import Base, User, Customer, VPSServer, Deployment, AuditLog, VPSGitSync, UserRole, VPSStatus, DeploymentStatus, VPSGitSyncStatus
 
 __all__ = [
     "Base",
@@ -8,7 +8,9 @@ __all__ = [
     "VPSServer",
     "Deployment",
     "AuditLog",
+    "VPSGitSync",
     "UserRole",
     "VPSStatus",
     "DeploymentStatus",
+    "VPSGitSyncStatus",
 ]

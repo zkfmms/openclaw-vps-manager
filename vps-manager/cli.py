@@ -274,6 +274,185 @@ def list_audit_logs(limit: int = typer.Option(100, help="Number of logs to show"
 
 
 @app.command()
+def restart_vps(vps_id: int):
+    """Restart OpenClaw service on a VPS."""
+    async def _restart_vps():
+        with console.status(f"[bold yellow]Restarting VPS {vps_id}..."):
+            async with get_client() as client:
+                response = await client.post(f"/api/v1/vps/{vps_id}/restart")
+
+        if response.status_code == 204:
+            console.print(f"[bold green]Restart successful for VPS {vps_id}")
+        else:
+            console.print(f"[red]Restart failed: {response.status_code}")
+
+    asyncio.run(_restart_vps())
+
+
+@app.command()
+def check_health(vps_id: int):
+    """Check health status of a VPS."""
+    async def _check_health():
+        with console.status(f"[bold yellow]Checking VPS {vps_id} health..."):
+            async with get_client() as client:
+                response = await client.get(f"/api/v1/vps/{vps_id}/health")
+
+        if response.status_code == 200:
+            health = response.json()
+            status_color = "green" if health.get("service_active") else "yellow"
+            console.print(Panel.from_dict(health, title=f"[bold]VPS {vps_id} Health", border_style=status_color))
+        else:
+            console.print(f"[red]Health check failed: {response.status_code}")
+
+    asyncio.run(_check_health())
+
+
+@app.command()
+def list_audit_logs(limit: int = typer.Option(100, help="Number of logs to show")):
+    """List audit logs."""
+    async def _list_audit_logs():
+        with console.status("[bold green]Fetching audit logs..."):
+            async with get_client() as client:
+                response = await client.get(f"/api/v1/audit/logs?limit={limit}")
+
+        if response.status_code == 200:
+            logs = response.json()
+            table = Table(title="Audit Logs")
+            table.add_column("ID", style="cyan")
+            table.add_column("User ID", style="yellow")
+            table.add_column("Action", style="blue")
+            table.add_column("Resource", style="magenta")
+            table.add_column("Timestamp", style="green")
+
+            for log in logs:
+                table.add_row(
+                    str(log["id"]),
+                    str(log.get("user_id", "N/A")),
+                    log["action"],
+                    log["resource_type"],
+                    log["timestamp"],
+                )
+
+            console.print(table)
+        else:
+            console.print(f"[red]Failed to fetch audit logs: {response.status_code}")
+
+    asyncio.run(_list_audit_logs())
+
+
+@app.command()
+def sync_vps(
+    vps_id: int,
+    pull: bool = typer.Option(False, "--pull", help="Pull changes from VPS only"),
+    push: bool = typer.Option(False, "--push", help="Push changes to VPS only"),
+    force: bool = typer.Option(False, "--force", help="Force sync without conflict detection"),
+):
+    """Sync with VPS (bidirectional Git sync)."""
+    async def _sync_vps():
+        with console.status(f"[bold yellow]Syncing VPS {vps_id}..."):
+            params = {"direction": "both"}
+            if pull:
+                params["direction"] = "pull"
+            if push:
+                params["direction"] = "push"
+            if force:
+                params["force"] = True
+
+            async with get_client() as client:
+                response = await client.post(f"/api/v1/sync/vps/{vps_id}/sync", json=params)
+
+        if response.status_code == 200:
+            status = response.json()
+            status_icon = "✓" if status["status"] == "success" else "✗"
+            console.print(f"[bold]Sync {status_icon} {status['message']}[/bold]")
+            console.print(f"  Status: {status['status']}")
+            console.print(f"  Local commit: {status.get('local_commit', 'N/A')[:7]}...")
+            console.print(f"  VPS commit: {status.get('remote_commit', 'N/A')[:7]}...")
+            if status.get("conflicts"):
+                console.print(f"[red]  Conflicts detected. Use 'sync vps <id> resolve <resolution>' to resolve")
+        else:
+            console.print(f"[red]Sync failed: {response.status_code}")
+
+    asyncio.run(_sync_vps())
+
+
+@app.command()
+def sync_status(vps_id: int):
+    """Get current synchronization status for a VPS."""
+    async def _sync_status():
+        with console.status("[bold green]Checking sync status..."):
+            async with get_client() as client:
+                response = await client.get(f"/api/v1/sync/vps/{vps_id}/status")
+
+        if response.status_code == 200:
+            status = response.json()
+            console.print(Panel.from_dict(status, title=f"[bold]Sync Status - VPS {vps_id}", border_style="blue"))
+        else:
+            console.print(f"[red]Failed to get sync status: {response.status_code}")
+
+    asyncio.run(_sync_status())
+
+
+@app.command()
+def sync_history(vps_id: int, limit: int = typer.Option(20, help="Number of sync records to show")):
+    """Get synchronization history for a VPS."""
+    async def _sync_history():
+        with console.status("[bold green]Fetching sync history..."):
+            async with get_client() as client:
+                response = await client.get(f"/api/v1/sync/vps/{vps_id}/history?limit={limit}")
+
+        if response.status_code == 200:
+            history = response.json()
+            table = Table(title=f"Sync History - VPS {vps_id}")
+            table.add_column("Sync ID", style="cyan")
+            table.add_column("Status", style="yellow")
+            table.add_column("Local Commit", style="blue")
+            table.add_column("Remote Commit", style="magenta")
+            table.add_column("Type", style="green")
+            table.add_column("Time", style="grey")
+
+            for record in history:
+                status_color = "green" if record["status"] == "success" else "yellow" if record["status"] == "conflict" else "red"
+                table.add_row(
+                    str(record["sync_id"]),
+                    f"[{status_color}]{record['status'][/{status_color}]",
+                    record.get("local_commit", "N/A")[:7] + "...",
+                    record.get("remote_commit", "N/A")[:7] + "...",
+                    record["sync_type"],
+                    record["created_at"][:19] + "...",
+                )
+
+            console.print(table)
+        else:
+            console.print(f"[red]Failed to fetch sync history: {response.status_code}")
+
+    asyncio.run(_sync_history())
+
+
+@app.command()
+def resolve_sync_conflict(
+    vps_id: int,
+    resolution: str = typer.Argument(..., help="Resolution: local, remote, merge, or manual"),
+):
+    """Resolve a merge conflict during synchronization."""
+    async def _resolve():
+        with console.status(f"[bold yellow]Resolving conflict for VPS {vps_id} using '{resolution}' strategy..."):
+            async with get_client() as client:
+                response = await client.post(
+                    f"/api/v1/sync/vps/{vps_id}/resolve-conflict",
+                    json={"resolution": resolution}
+                )
+
+        if response.status_code == 200:
+            console.print(f"[bold green]Conflict resolved successfully![/bold]")
+            console.print(f"Resolution: {resolution}")
+        else:
+            console.print(f"[red]Failed to resolve conflict: {response.status_code}")
+
+    asyncio.run(_resolve())
+
+
+@app.command()
 def interactive():
     """Start interactive mode."""
     console.print("[bold green]OpenClaw VPS Manager - Interactive Mode[/bold green]")
@@ -298,6 +477,13 @@ def interactive():
   restart <vps-id>    - Restart VPS service
   check <vps-id>      - Check VPS health
   logs                - Show audit logs
+  sync vps <id>      - Sync with VPS (bidirectional Git)
+  sync vps <id> --pull  - Pull changes from VPS
+  sync vps <id> --push   - Push changes to VPS
+  sync vps <id> --force  - Force sync (overwrite)
+  sync status <id>      - Get sync status
+  sync history <id>     - Get sync history
+  resolve sync <id> <resolution> - Resolve merge conflict
   help                - Show this help
   exit                - Exit interactive mode
                 """)

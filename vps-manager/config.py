@@ -144,6 +144,66 @@ class Settings(BaseSettings):
         description="Rate limit period in seconds"
     )
 
+    # Password Security
+    password_min_length: int = Field(
+        default=12,
+        description="Minimum password length"
+    )
+    password_require_uppercase: bool = Field(
+        default=True,
+        description="Require uppercase letters in passwords"
+    )
+    password_require_lowercase: bool = Field(
+        default=True,
+        description="Require lowercase letters in passwords"
+    )
+    password_require_digits: bool = Field(
+        default=True,
+        description="Require digits in passwords"
+    )
+    password_require_special: bool = Field(
+        default=True,
+        description="Require special characters in passwords"
+    )
+    password_special_chars: str = Field(
+        default="!@#$%^&*()_+-=[]{}|;:,.<>?",
+        description="Special characters allowed in passwords"
+    )
+
+    # API Key Management
+    api_key_enabled: bool = Field(
+        default=True,
+        description="Enable API key authentication"
+    )
+    api_key_rotation_days: int = Field(
+        default=90,
+        description="Days before API key expiration"
+    )
+
+    # Input Validation
+    max_request_size: int = Field(
+        default=10 * 1024 * 1024,  # 10 MB
+        description="Maximum request body size in bytes"
+    )
+    allowed_hostname_regex: str = Field(
+        default=r"^[\w\-\.]+$",
+        description="Regex pattern for allowed hostnames"
+    )
+
+    # Logging
+    log_dir: str = Field(
+        default="/var/log/vps-manager",
+        description="Directory for log files"
+    )
+    log_rotation_max_bytes: int = Field(
+        default=10 * 1024 * 1024,  # 10 MB
+        description="Maximum size of log file before rotation"
+    )
+    log_rotation_backup_count: int = Field(
+        default=5,
+        description="Number of backup log files to keep"
+    )
+
     @field_validator("ssh_key_type")
     @classmethod
     def validate_ssh_key_type(cls, v: str) -> str:

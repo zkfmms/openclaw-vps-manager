@@ -48,6 +48,16 @@ class VPSStatus(str, Enum):
     ACTIVE = "active"
     MAINTENANCE = "maintenance"
     ERROR = "error"
+
+
+class VPSGitSyncStatus(str, Enum):
+    """VPS Git synchronization status."""
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    SUCCESS = "success"
+    FAILED = "failed"
+    CONFLICT = "conflict"
+    SYNCED = "synced"
     DECOMMISSIONED = "decommissioned"
 
 
@@ -114,6 +124,7 @@ class VPSServer(Base):
     customer = relationship("Customer", back_populates="vps_servers")
     deployments = relationship("Deployment", back_populates="vps", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="vps", cascade="all, delete-orphan")
+    sync_records = relationship("VPSGitSync", back_populates="vps", cascade="all, delete-orphan")
 
 
 class Deployment(Base):
@@ -181,3 +192,27 @@ async def init_db():
     """Initialize database tables."""
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+class VPSGitSync(Base):
+    """VPS Git synchronization tracking model."""
+    __tablename__ = "vps_git_sync"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    vps_id: Mapped[int] = mapped_column(ForeignKey("vps_servers.id"), nullable=False, index=True)
+    last_sync_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    sync_status: Mapped[VPSGitSyncStatus] = mapped_column(String(20), default=VPSGitSyncStatus.PENDING, nullable=False, index=True)
+    local_commit: Mapped[str] = mapped_column(String(64), nullable=True)
+    remote_commit: Mapped[str] = mapped_column(String(64), nullable=True)
+    conflict_details: Mapped[Optional[dict]] = mapped_column(Text, nullable=True)
+    sync_type: Mapped[str] = mapped_column(String(20), default="auto", nullable=False)  # auto, manual, force
+    initiated_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    vps = relationship("VPSServer", back_populates="sync_records")
+    initiator = relationship("User")
+
+
+# Add sync_records relationship to VPSServer
+# This needs to be added after VPSServer class definition
