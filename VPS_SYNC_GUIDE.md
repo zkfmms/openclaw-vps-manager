@@ -86,6 +86,36 @@ python cli.py sync status <vps-id>
 python cli.py sync history <vps-id>
 ```
 
+### Data Synchronization (New!)
+```bash
+# Sync OpenClaw data (tweets, skills, etc.) from any VPS
+python cli.py sync-data <hostname>
+
+# Example: Sync from rokkonch
+python cli.py sync-data rokkonch
+
+# Sync with custom database path
+python cli.py sync-data rokkonch --db-path /custom/path/tweets.db
+
+# Sync without creating backup
+python cli.py sync-data rokkonch --no-backup
+
+# Sync from custom workspace directory
+python cli.py sync-data user@vps.example.com --workspace-dir /path/to/workspace
+```
+
+**What gets synced:**
+- Tweet data (my_tweets.json, replies_to_target.json, etc.)
+- Skills directory (backup only)
+- All data stored in local SQLite database
+
+**Key features:**
+- Works with any VPS hostname (not just rokkonch)
+- Automatic database creation and schema management
+- Duplicate detection and handling
+- Progress reporting for large datasets
+- Configurable paths and options
+
 ### Resolve Conflict
 ```bash
 python cli.py resolve sync <vps-id> local
