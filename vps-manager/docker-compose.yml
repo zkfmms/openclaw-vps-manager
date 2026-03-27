@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: openclaw-vps-db
+    environment:
+      POSTGRES_USER: openclaw
+      POSTGRES_PASSWORD: openclaw_password
+      POSTGRES_DB: openclaw_vps_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openclaw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - openclaw-network
+
+  # VPS Manager API
+  api:
+    build: .
+    container_name: openclaw-vps-api
+    environment:
+      DATABASE_URL: postgresql://openclaw:openclaw_password@postgres:5432/openclaw_vps_manager
+      GIT_REPO_PATH: /var/git/openclaw-configs
+      GIT_REPO_URL: ${GIT_REPO_URL:-}
+      SSH_KEYS_PATH: /var/ssh/keys
+      SSH_KEY_TYPE: ed25519
+      ENCRYPTION_KEY_PATH: /var/keys/encryption
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
+      JWT_EXPIRATION_HOURS: 24
+      TLS_CERT_PATH: /var/tls/cert.pem
+      TLS_KEY_PATH: /var/tls/key.pem
+      TLS_CA_CERT_PATH: /var/tls/ca.pem
+      TLS_VERIFY_CLIENT: ${TLS_VERIFY_CLIENT:-false}
+      OPENCLAW_DEFAULT_VERSION: latest
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    volumes:
+      - git_data:/var/git/openclaw-configs
+      - ssh_keys:/var/ssh/keys
+      - encryption_keys:/var/keys
+      - tls_certs:/var/tls
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - openclaw-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  git_data:
+  ssh_keys:
+  encryption_keys:
+  tls_certs:
+
+networks:
+  openclaw-network:
+    driver: bridge

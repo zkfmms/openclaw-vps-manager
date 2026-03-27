@@ -1,0 +1,52 @@
+{
+  "agent": {
+    "model": "anthropic/claude-sonnet-4-6",
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "OPENCLAW_GATEWAY_TOKEN"
+      }
+    }
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["~/.openclaw/workspace/skills"],
+      "watch": true
+    },
+    "entries": {
+      "example_skill": {
+        "enabled": true,
+        "config": {
+          "option1": "value1",
+          "option2": "value2"
+        }
+      }
+    }
+  },
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "DISCORD_TOKEN"
+      }
+    },
+    "slack": {
+      "enabled": false,
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "SLACK_TOKEN"
+      }
+    }
+  }
+}
