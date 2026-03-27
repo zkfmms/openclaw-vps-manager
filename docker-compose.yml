@@ -23,7 +23,7 @@ services:
 
   # VPS Manager API
   api:
-    build: ./vps-manager
+    build: .
     container_name: openclaw-vps-api
     environment:
       DATABASE_URL: postgresql://openclaw:openclaw_password@postgres:5432/openclaw_vps_manager

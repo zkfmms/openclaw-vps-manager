@@ -93,7 +93,7 @@ This system handles sensitive data including:
 ### 1. Setup
 
 ```bash
-cp vps-manager/.env.example .env
+cp .env.example .env
 ```
 
 Edit `.env` if needed (default values work for local development).
@@ -346,75 +346,76 @@ python scripts/rotate_keys.py --vps-id 1
 
 ```
 openclaw-vps-manager/
-├── README.md                   # This file (repository root)
+├── README.md                   # This file
 ├── requirements.txt             # Python dependencies
 ├── docker-compose.yml           # Full stack
-├── .env.example               # Environment template
-├── API_USAGE.md              # Complete API documentation
-├── QUICKSTART.md             # Quick start guide
-├── SECURITY.md               # Security documentation
+├── Dockerfile                # Docker image
+├── .env.example              # Environment template
+├── .gitignore                # Git ignore patterns
+├── API_USAGE.md             # Complete API documentation
+├── QUICKSTART.md           # Quick start guide
+├── SECURITY.md             # Security documentation
 ├── GIT_PUBLISHING_CHECKLIST.md # Git publishing checklist
-├── VPS_SYNC_GUIDE.md         # VPS sync guide
+├── VPS_SYNC_GUIDE.md       # VPS sync guide
+├── IMPLEMENTATION.md        # Implementation guide
+├── IMPLEMENTATION_SUMMARY.md # Implementation summary
 │
-├── vps-manager/              # Main application directory
-│   ├── main.py              # FastAPI application
-│   ├── cli.py               # Rich CLI interface
-│   ├── config.py            # Configuration management
-│   ├── database.py          # Database models
-│   ├── .gitignore          # Git ignore patterns
-│   ├── Dockerfile          # Docker image
-│   ├── setup-vps.sh      # VPS setup script
-│   │
-│   ├── auth/               # Authentication & authorization
-│   │   ├── __init__.py
-│   │   ├── middleware.py    # mTLS & JWT
-│   │   └── rbac.py        # Role-based access control
-│   │
-│   ├── services/           # Core business logic
-│   │   ├── __init__.py
-│   │   ├── ssh_manager.py  # SSH connection pool
-│   │   ├── git_manager.py  # Git operations
-│   │   ├── openclaw_manager.py # OpenClaw orchestration
-│   │   ├── encryption.py   # Configuration encryption
-│   │   ├── exceptions.py   # Custom exceptions
-│   │   ├── monitoring.py   # Monitoring & metrics
-│   │   └── logging.py     # Structured logging
-│   │
-│   ├── api/               # REST API endpoints
-│   │   ├── __init__.py
-│   │   ├── vps.py         # VPS management
-│   │   ├── customers.py   # Customer management
-│   │   ├── config.py     # Configuration management
-│   │   ├── audit.py      # Audit logging
-│   │   ├── deployments.py # Deployment management
-│   │   └── vps_sync.py   # VPS sync endpoints
-│   │
-│   ├── models/            # Database models
-│   │   ├── __init__.py
-│   │   ├── customer.py
-│   │   ├── vps.py
-│   │   ├── deployment.py
-│   │   └── audit.py
-│   │
-│   ├── scripts/           # Utility scripts
-│   │   ├── init_db.py   # Database initialization
-│   │   └── rotate_keys.py # SSH key rotation
-│   │
-│   ├── cli/              # CLI components
-│   │   ├── config.py    # CLI configuration
-│   │   └── completion/  # Shell completion scripts
-│   │
-│   └── tests/            # Test suite
-│       ├── conftest.py
-│       ├── test_api.py
-│       ├── test_auth.py
-│       ├── test_encryption.py
-│       ├── test_exceptions.py
-│       ├── test_git_manager.py
-│       ├── test_integration.py
-│       ├── test_logging.py
-│       ├── test_monitoring.py
-│       └── test_ssh_manager.py
+├── main.py                # FastAPI application
+├── cli.py                 # Rich CLI interface
+├── config.py              # Configuration management
+├── database.py            # Database models
+├── setup-vps.sh          # VPS setup script
+│
+├── auth/                 # Authentication & authorization
+│   ├── __init__.py
+│   ├── middleware.py       # mTLS & JWT
+│   └── rbac.py           # Role-based access control
+│
+├── services/              # Core business logic
+│   ├── __init__.py
+│   ├── ssh_manager.py     # SSH connection pool
+│   ├── git_manager.py     # Git operations
+│   ├── openclaw_manager.py # OpenClaw orchestration
+│   ├── encryption.py      # Configuration encryption
+│   ├── exceptions.py      # Custom exceptions
+│   ├── monitoring.py      # Monitoring & metrics
+│   └── logging.py        # Structured logging
+│
+├── api/                  # REST API endpoints
+│   ├── __init__.py
+│   ├── vps.py            # VPS management
+│   ├── customers.py      # Customer management
+│   ├── config.py        # Configuration management
+│   ├── audit.py         # Audit logging
+│   ├── deployments.py   # Deployment management
+│   └── vps_sync.py     # VPS sync endpoints
+│
+├── models/               # Database models
+│   ├── __init__.py
+│   ├── customer.py
+│   ├── vps.py
+│   ├── deployment.py
+│   └── audit.py
+│
+├── scripts/              # Utility scripts
+│   ├── init_db.py      # Database initialization
+│   └── rotate_keys.py   # SSH key rotation
+│
+├── cli/                 # CLI components
+│   ├── config.py       # CLI configuration
+│   └── completion/     # Shell completion scripts
+│
+└── tests/               # Test suite
+    ├── conftest.py
+    ├── test_api.py
+    ├── test_auth.py
+    ├── test_encryption.py
+    ├── test_exceptions.py
+    ├── test_git_manager.py
+    ├── test_integration.py
+    ├── test_logging.py
+    ├── test_monitoring.py
+    └── test_ssh_manager.py
 ```
 
 ## Security
