@@ -190,6 +190,10 @@ exit                - Exit interactive mode
 
 ## API Usage Examples
 
+For complete API documentation with all endpoints, schemas, and error handling, see [API_USAGE.md](API_USAGE.md).
+
+### Quick Start Examples
+
 ### Create Customer
 
 ```bash
@@ -521,6 +525,7 @@ ssh user@vps "sudo journalctl -u openclaw.service -f"
 
 ## Documentation
 
+- `API_USAGE.md` - Complete API documentation with examples and error handling
 - `QUICKSTART.md` - Get started in 5 minutes
 - `SECURITY.md` - Complete security documentation
 - `GIT_PUBLISHING_CHECKLIST.md` - Checklist before publishing to Git

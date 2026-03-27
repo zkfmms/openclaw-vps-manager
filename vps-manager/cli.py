@@ -1,60 +1,160 @@
 #!/usr/bin/env python3
 """Rich CLI interface for OpenClaw VPS Manager."""
 import asyncio
+import json
 import os
-from typing import Optional
+from typing import Optional, List
 
 import httpx
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.prompt import Prompt, Confirm
+from rich.json import RichJsonEncoder
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+
+# Import config
+try:
+    from cli.config import get_config, CLIConfig
+except ImportError:
+    # Fallback for when running from different directory
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from cli.config import get_config, CLIConfig
 
 app = typer.Typer(help="OpenClaw VPS Manager CLI")
 console = Console()
 
-# Configuration
-API_BASE_URL = os.getenv("VPS_MANAGER_API_URL", "http://localhost:8000")
-API_TOKEN = os.getenv("VPS_MANAGER_TOKEN", "")
+# Global flags
+verbose = False
+quiet = False
+output_format = "table"
 
 
-def get_client() -> httpx.AsyncClient:
-    """Get HTTP client with authentication."""
+def format_output(data, format_type: str = None):
+    """
+    Format output according to specified format.
+
+    Args:
+        data: Data to format.
+        format_type: Output format (table, json, yaml).
+    """
+    fmt = format_type or output_format
+
+    if fmt == "json":
+        console.print_json(json.dumps(data, cls=RichJsonEncoder))
+        return True
+    elif fmt == "yaml":
+        console.print(yaml.dump(data, default_flow_style=False))
+        return True
+    return False  # Caller handles table format
+
+
+def get_client(config: CLIConfig = None) -> httpx.AsyncClient:
+    """
+    Get HTTP client with authentication.
+
+    Args:
+        config: Optional CLI configuration.
+
+    Returns:
+        Configured httpx.AsyncClient.
+    """
+    cfg = config or get_config()
+    api_url = cfg.get_api_url()
+    token = cfg.get_token()
+    timeout = cfg.get_timeout()
+    verify_ssl = cfg.get_verify_ssl()
+
     headers = {}
-    if API_TOKEN:
-        headers["Authorization"] = f"Bearer {API_TOKEN}"
-    return httpx.AsyncClient(base_url=API_BASE_URL, headers=headers, timeout=30.0)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    return httpx.AsyncClient(
+        base_url=api_url,
+        headers=headers,
+        timeout=timeout,
+        verify=verify_ssl,
+    )
+
+
+def log_verbose(message: str):
+    """Log verbose message if verbose mode is enabled."""
+    if verbose:
+        console.print(f"[dim]{message}[/dim]")
+
+
+def log_quiet(message: str):
+    """Log message if quiet mode is disabled."""
+    if not quiet:
+        console.print(message)
+
+
+@app.callback()
+def main(
+    verbose_flag: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
+    quiet_flag: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    output_fmt: str = typer.Option("table", "--output", "-o", help="Output format (table, json, yaml)"),
+):
+    """
+    Global CLI options.
+    """
+    global verbose, quiet, output_format
+    verbose = verbose_flag
+    quiet = quiet_flag
+    output_format = output_fmt
+
+    if output_fmt not in ("table", "json", "yaml"):
+        console.print("[red]Output format must be one of: table, json, yaml[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
 def health():
     """Check API health status."""
+    config = get_config()
+    log_verbose(f"Checking health at: {config.get_api_url()}")
+
     with console.status("[bold green]Checking API health..."):
-        response = httpx.get(f"{API_BASE_URL}/health")
+        response = httpx.get(f"{config.get_api_url()}/health", verify=config.get_verify_ssl())
 
     if response.status_code == 200:
-        console.print(Panel(response.json(), title="[bold green]API Health", border_style="green"))
+        data = response.json()
+        if format_output(data):
+            return
+        console.print(Panel(data, title="[bold green]API Health", border_style="green"))
     else:
-        console.print(f"[red]API health check failed: {response.status_code}")
+        console.print(f"[red]API health check failed: {response.status_code}[/red]")
 
 
 @app.command()
-def list_vps(customer_id: Optional[int] = typer.Argument(None)):
+def list_vps(
+    customer_id: Optional[int] = typer.Option(None, "--customer-id", "-c", help="Filter by customer ID"),
+):
     """List all VPS servers."""
     async def _list_vps():
-        async with get_client() as client:
+        config = get_config()
+        async with get_client(config) as client:
             params = {}
             if customer_id:
                 params["customer_id"] = customer_id
 
+            log_verbose(f"Fetching VPS list with params: {params}")
             response = await client.get("/api/v1/vps", params=params)
 
             if response.status_code != 200:
-                console.print(f"[red]Failed to list VPS: {response.status_code}")
+                console.print(f"[red]Failed to list VPS: {response.status_code}[/red]")
+                if not quiet:
+                    console.print(response.text)
                 return
 
             vps_list = response.json()
+            log_quiet(f"Found {len(vps_list)} VPS servers")
+
+            if format_output(vps_list):
+                return
 
             table = Table(title="VPS Servers")
             table.add_column("ID", style="cyan")
@@ -72,7 +172,7 @@ def list_vps(customer_id: Optional[int] = typer.Argument(None)):
                     vps["hostname"],
                     vps["ssh_user"],
                     vps["openclaw_version"],
-                    f"[{status_color}]{vps['status'][/{status_color}]",
+                    f"[{status_color}]{vps['status']}[/{status_color}]",
                 )
 
             console.print(table)
@@ -84,14 +184,20 @@ def list_vps(customer_id: Optional[int] = typer.Argument(None)):
 def list_customers():
     """List all customers."""
     async def _list_customers():
-        async with get_client() as client:
+        config = get_config()
+        async with get_client(config) as client:
+            log_verbose("Fetching customers list")
             response = await client.get("/api/v1/customers")
 
             if response.status_code != 200:
-                console.print(f"[red]Failed to list customers: {response.status_code}")
+                console.print(f"[red]Failed to list customers: {response.status_code}[/red]")
                 return
 
             customers = response.json()
+            log_quiet(f"Found {len(customers)} customers")
+
+            if format_output(customers):
+                return
 
             table = Table(title="Customers")
             table.add_column("ID", style="cyan")
@@ -117,25 +223,34 @@ def list_customers():
 
 @app.command()
 def list_deployments(
-    customer_id: Optional[int] = typer.Argument(None),
-    vps_id: Optional[int] = typer.Argument(None),
+    customer_id: Optional[int] = typer.Option(None, "--customer-id", "-c", help="Filter by customer ID"),
+    vps_id: Optional[int] = typer.Option(None, "--vps-id", "-v", help="Filter by VPS ID"),
+    status_filter: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status"),
 ):
     """List deployments."""
     async def _list_deployments():
-        async with get_client() as client:
+        config = get_config()
+        async with get_client(config) as client:
             params = {}
             if customer_id:
                 params["customer_id"] = customer_id
             if vps_id:
                 params["vps_id"] = vps_id
+            if status_filter:
+                params["status_filter"] = status_filter
 
+            log_verbose(f"Fetching deployments with params: {params}")
             response = await client.get("/api/v1/deployments", params=params)
 
             if response.status_code != 200:
-                console.print(f"[red]Failed to list deployments: {response.status_code}")
+                console.print(f"[red]Failed to list deployments: {response.status_code}[/red]")
                 return
 
             deployments = response.json()
+            log_quiet(f"Found {len(deployments)} deployments")
+
+            if format_output(deployments):
+                return
 
             table = Table(title="Deployments")
             table.add_column("ID", style="cyan")
@@ -165,15 +280,21 @@ def list_deployments(
 def show_config(customer_id: int):
     """Show OpenClaw configuration for a customer."""
     async def _show_config():
-        async with get_client() as client:
+        config = get_config()
+        async with get_client(config) as client:
+            log_verbose(f"Fetching config for customer {customer_id}")
             response = await client.get(f"/api/v1/config/{customer_id}")
 
             if response.status_code != 200:
-                console.print(f"[red]Failed to get config: {response.status_code}")
+                console.print(f"[red]Failed to get config: {response.status_code}[/red]")
                 return
 
-            config = response.json()
-            console.print(Panel.from_dict(config, title="[bold green]OpenClaw Configuration"))
+            config_data = response.json()
+
+            if format_output(config_data):
+                return
+
+            console.print(Panel.from_dict(config_data, title="[bold green]OpenClaw Configuration"))
 
     asyncio.run(_show_config())
 
@@ -182,16 +303,21 @@ def show_config(customer_id: int):
 def deploy_vps(vps_id: int):
     """Deploy configuration to a VPS."""
     async def _deploy_vps():
-        with console.status(f"[bold yellow]Deploying to VPS {vps_id}..."):
-            async with get_client() as client:
+        config = get_config()
+        async with get_client(config) as client:
+            log_verbose(f"Deploying to VPS {vps_id}")
+
+            with console.status(f"[bold yellow]Deploying to VPS {vps_id}..."):
                 response = await client.post(f"/api/v1/vps/{vps_id}/deploy")
 
         if response.status_code == 200:
-            console.print(f"[bold green]Deployment successful for VPS {vps_id}")
-            console.print(Panel(response.json()))
+            console.print(f"[bold green]Deployment successful for VPS {vps_id}[/bold green]")
+            log_quiet("Deployment completed successfully")
+            if not quiet and output_format == "table":
+                console.print(Panel(response.json()))
         else:
-            console.print(f"[red]Deployment failed: {response.status_code}")
-            console.print(response.json())
+            console.print(f"[red]Deployment failed: {response.status_code}[/red]")
+            console.print(response.text)
 
     asyncio.run(_deploy_vps())
 
@@ -200,23 +326,33 @@ def deploy_vps(vps_id: int):
 def restart_vps(vps_id: int):
     """Restart OpenClaw service on a VPS."""
     async def _restart_vps():
-        with console.status(f"[bold yellow]Restarting VPS {vps_id}..."):
-            async with get_client() as client:
+        config = get_config()
+        async with get_client(config) as client:
+            log_verbose(f"Restarting VPS {vps_id}")
+
+            with console.status(f"[bold yellow]Restarting VPS {vps_id}..."):
                 response = await client.post(f"/api/v1/vps/{vps_id}/restart")
 
-        if response.status_code == 204:
-            console.print(f"[bold green]Restart successful for VPS {vps_id}")
-        else:
-            console.print(f"[red]Restart failed: {response.status_code}")
+            if response.status_code == 204:
+                console.print(f"[bold green]Restart successful for VPS {vps_id}[/bold green]")
+                log_quiet("Restart completed successfully")
+            else:
+                console.print(f"[red]Restart failed: {response.status_code}[/red]")
+                console.print(response.text)
 
     asyncio.run(_restart_vps())
 
 
 @app.command()
-def check_health(vps_id: int):
+def check_health(
+    vps_id: int,
+    detailed: bool = typer.Option(False, "--detailed", "-d", help="Show detailed health information"),
+):
     """Check health status of a VPS."""
     async def _check_health():
-        async with get_client() as client:
+        config = get_config()
+        async with get_client(config) as client:
+            log_verbose(f"Checking health for VPS {vps_id}")
             response = await client.get(f"/api/v1/vps/{vps_id}/health")
 
             if response.status_code != 200:
@@ -225,22 +361,32 @@ def check_health(vps_id: int):
 
             health = response.json()
 
-            table = Table(title=f"VPS {vps_id} Health Status")
-            table.add_column("Metric", style="cyan")
-            table.add_column("Status", style="bold")
+            if format_output(health):
+                return
 
-            for key, value in health.items():
-                if key != "vps_id":
-                    status_color = "green" if value else "red"
-                    table.add_row(key.replace("_", " ").title(), f"[{status_color}]{value}[/{status_color}]")
+            if detailed:
+                table = Table(title=f"VPS {vps_id} Health Status")
+                table.add_column("Metric", style="cyan")
+                table.add_column("Value", style="bold")
 
-            console.print(table)
+                for key, value in health.items():
+                    if key != "vps_id":
+                        table.add_row(key.replace("_", " ").title(), str(value))
+                console.print(table)
+            else:
+                # Simplified view
+                status = "healthy" if health.get("service_active") else "unhealthy"
+                color = "green" if health.get("service_active") else "red"
+                console.print(f"[{color}]VPS {vps_id} is {status}[/{color}]")
 
     asyncio.run(_check_health())
 
 
 @app.command()
-def list_audit_logs(limit: int = typer.Option(100, help="Number of logs to show")):
+def list_audit_logs(
+    limit: int = typer.Option(100, help="Number of logs to show"),
+    action: Optional[str] = typer.Option(None, help="Filter by action"),
+):
     """List audit logs."""
     async def _list_audit_logs():
         async with get_client() as client:
@@ -269,73 +415,6 @@ def list_audit_logs(limit: int = typer.Option(100, help="Number of logs to show"
                 )
 
             console.print(table)
-
-    asyncio.run(_list_audit_logs())
-
-
-@app.command()
-def restart_vps(vps_id: int):
-    """Restart OpenClaw service on a VPS."""
-    async def _restart_vps():
-        with console.status(f"[bold yellow]Restarting VPS {vps_id}..."):
-            async with get_client() as client:
-                response = await client.post(f"/api/v1/vps/{vps_id}/restart")
-
-        if response.status_code == 204:
-            console.print(f"[bold green]Restart successful for VPS {vps_id}")
-        else:
-            console.print(f"[red]Restart failed: {response.status_code}")
-
-    asyncio.run(_restart_vps())
-
-
-@app.command()
-def check_health(vps_id: int):
-    """Check health status of a VPS."""
-    async def _check_health():
-        with console.status(f"[bold yellow]Checking VPS {vps_id} health..."):
-            async with get_client() as client:
-                response = await client.get(f"/api/v1/vps/{vps_id}/health")
-
-        if response.status_code == 200:
-            health = response.json()
-            status_color = "green" if health.get("service_active") else "yellow"
-            console.print(Panel.from_dict(health, title=f"[bold]VPS {vps_id} Health", border_style=status_color))
-        else:
-            console.print(f"[red]Health check failed: {response.status_code}")
-
-    asyncio.run(_check_health())
-
-
-@app.command()
-def list_audit_logs(limit: int = typer.Option(100, help="Number of logs to show")):
-    """List audit logs."""
-    async def _list_audit_logs():
-        with console.status("[bold green]Fetching audit logs..."):
-            async with get_client() as client:
-                response = await client.get(f"/api/v1/audit/logs?limit={limit}")
-
-        if response.status_code == 200:
-            logs = response.json()
-            table = Table(title="Audit Logs")
-            table.add_column("ID", style="cyan")
-            table.add_column("User ID", style="yellow")
-            table.add_column("Action", style="blue")
-            table.add_column("Resource", style="magenta")
-            table.add_column("Timestamp", style="green")
-
-            for log in logs:
-                table.add_row(
-                    str(log["id"]),
-                    str(log.get("user_id", "N/A")),
-                    log["action"],
-                    log["resource_type"],
-                    log["timestamp"],
-                )
-
-            console.print(table)
-        else:
-            console.print(f"[red]Failed to fetch audit logs: {response.status_code}")
 
     asyncio.run(_list_audit_logs())
 
@@ -415,7 +494,7 @@ def sync_history(vps_id: int, limit: int = typer.Option(20, help="Number of sync
                 status_color = "green" if record["status"] == "success" else "yellow" if record["status"] == "conflict" else "red"
                 table.add_row(
                     str(record["sync_id"]),
-                    f"[{status_color}]{record['status'][/{status_color}]",
+                    f"[{status_color}]{record['status']}[/{status_color}]",
                     record.get("local_commit", "N/A")[:7] + "...",
                     record.get("remote_commit", "N/A")[:7] + "...",
                     record["sync_type"],
@@ -450,6 +529,228 @@ def resolve_sync_conflict(
             console.print(f"[red]Failed to resolve conflict: {response.status_code}")
 
     asyncio.run(_resolve())
+
+
+@app.command()
+def completion(
+    shell: str = typer.Argument(..., help="Shell type (bash, zsh, fish)"),
+    show_path: bool = typer.Option(False, "--show-path", help="Show the path to completion script"),
+):
+    """Generate shell completion script."""
+    from cli.completion import get_completion_scripts_dir
+
+    scripts_dir = get_completion_scripts_dir()
+
+    if shell == "bash":
+        script_path = scripts_dir / "bash.sh"
+    elif shell == "zsh":
+        script_path = scripts_dir / "zsh.sh"
+    elif shell == "fish":
+        script_path = scripts_dir / "fish.sh"
+    else:
+        console.print(f"[red]Unsupported shell: {shell}[/red]")
+        console.print("Supported shells: bash, zsh, fish")
+        raise typer.Exit(1)
+
+    if show_path:
+        console.print(str(script_path))
+        return
+
+    console.print(f"To enable {shell} completion, add the following to your {shell} config:")
+    console.print()
+    console.print(f"[cyan]source {script_path}[/cyan]")
+    console.print()
+    console.print("Or use the install command:")
+    console.print(f"[cyan]vps-manager config completion install {shell}[/cyan]")
+
+
+@app.command()
+def check_all_health():
+    """Check health status of all VPS servers."""
+    async def _check_all():
+        config = get_config()
+        async with get_client(config) as client:
+            log_verbose("Fetching VPS list for health check")
+
+            # Get VPS list
+            response = await client.get("/api/v1/vps")
+            if response.status_code != 200:
+                console.print("[red]Failed to get VPS list[/red]")
+                return
+
+            vps_list = response.json()
+            if not vps_list:
+                console.print("[yellow]No VPS servers found[/yellow]")
+                return
+
+            # Check each VPS health
+            results = {"healthy": [], "unhealthy": [], "error": []}
+
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("[bold yellow]Checking VPS health...", total=len(vps_list))
+
+                async with get_client(config) as client:
+                    for vps in vps_list:
+                        vps_id = vps["id"]
+                        response = await client.get(f"/api/v1/vps/{vps_id}/health")
+
+                        if response.status_code == 200:
+                            health = response.json()
+                            if health.get("service_active"):
+                                results["healthy"].append(vps_id)
+                            else:
+                                results["unhealthy"].append(vps_id)
+                        else:
+                            results["error"].append(vps_id)
+
+                        progress.update(task, advance=1)
+
+            # Display results
+            console.print(f"\n[bold green]Health Check Summary:[/bold green]")
+            console.print(f"  [green]Healthy: {len(results['healthy'])}[/green]")
+            console.print(f"  [yellow]Unhealthy: {len(results['unhealthy'])}[/yellow]")
+            console.print(f"  [red]Error: {len(results['error'])}[/red]")
+
+            if output_format == "table" and not quiet:
+                table = Table(title="VPS Health Status")
+                table.add_column("ID", style="cyan")
+                table.add_column("Hostname", style="yellow")
+                table.add_column("Status", style="bold")
+
+                for vps in vps_list:
+                    vps_id = vps["id"]
+                    if vps_id in results["healthy"]:
+                        status = f"[green]healthy[/green]"
+                    elif vps_id in results["unhealthy"]:
+                        status = f"[yellow]unhealthy[/yellow]"
+                    else:
+                        status = f"[red]error[/red]"
+                    table.add_row(str(vps_id), vps["hostname"], status)
+
+                console.print(table)
+
+    asyncio.run(_check_all())
+
+
+@app.command()
+def deploy_multiple(
+    vps_ids: List[int] = typer.Option(..., "--vps-id", "-v", help="VPS IDs to deploy"),
+):
+    """Deploy configuration to multiple VPS servers."""
+    async def _deploy_multiple():
+        config = get_config()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[bold yellow]Deploying to VPS servers...", total=len(vps_ids))
+
+            results = {"success": [], "failed": []}
+
+            async with get_client(config) as client:
+                for vps_id in vps_ids:
+                    log_verbose(f"Deploying to VPS {vps_id}")
+                    response = await client.post(f"/api/v1/vps/{vps_id}/deploy")
+
+                    if response.status_code == 200:
+                        results["success"].append(vps_id)
+                    else:
+                        results["failed"].append(vps_id)
+
+                    progress.update(task, advance=1)
+
+        console.print(f"[bold green]Deployment summary:[/bold green]")
+        console.print(f"  Successful: {len(results['success'])}")
+        console.print(f"  Failed: {len(results['failed'])}")
+
+        if results["failed"]:
+            console.print(f"[red]Failed VPS IDs: {results['failed']}[/red]")
+        else:
+            console.print(f"[green]All deployments succeeded![/green]")
+
+    asyncio.run(_deploy_multiple())
+
+
+# Config command group
+config_app = typer.Typer(help="Manage CLI configuration")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("init")
+def config_init(
+    api_url: str = typer.Option(..., prompt="API URL", help="VPS Manager API URL"),
+    token: str = typer.Option(..., prompt="API Token", help="Authentication token"),
+):
+    """Initialize CLI configuration."""
+    config = get_config()
+    config.init(api_url, token)
+    console.print(f"[green]Configuration initialized for API at: {api_url}[/green]")
+
+
+@config_app.command("show")
+def config_show():
+    """Display current configuration."""
+    config = get_config()
+    config.show()
+
+
+@config_app.command("get")
+def config_get(
+    key: str = typer.Argument(..., help="Configuration key"),
+):
+    """Get a configuration value."""
+    config = get_config()
+    value = config.get(key)
+    if value is not None:
+        console.print(value)
+    else:
+        console.print(f"[yellow]Configuration key '{key}' not found[/yellow]")
+
+
+@config_app.command("set")
+def config_set(
+    key: str = typer.Argument(..., help="Configuration key"),
+    value: str = typer.Argument(..., help="Configuration value"),
+):
+    """Set a configuration value."""
+    config = get_config()
+
+    # Handle special keys
+    if key == "api_url":
+        config.set_api_url(value)
+    elif key == "token":
+        config.set_token(value)
+    elif key == "output_format":
+        config.set_output_format(value)
+    else:
+        config.set(key, value)
+
+    console.print(f"[green]Configuration set: {key} = {value}[/green]")
+
+
+@config_app.command("reset")
+def config_reset(
+    confirm: bool = typer.Option(False, "--confirm", "-y", help="Skip confirmation prompt"),
+):
+    """Reset configuration to defaults."""
+    config = get_config()
+
+    if not confirm:
+        if not Confirm.ask("Are you sure you want to reset configuration?", default=False):
+            console.print("[yellow]Reset cancelled[/yellow]")
+            return
+
+    config.reset()
 
 
 @app.command()
@@ -521,6 +822,44 @@ def interactive():
                     console.print("[red]Usage: check <vps-id>[/red]")
             elif command.lower() == "logs":
                 list_audit_logs()
+            elif command.lower().startswith("sync"):
+                try:
+                    parts = command.split()
+                    if len(parts) < 3:
+                        console.print("[red]Usage: sync vps <id> [--pull|--push|--force] | sync status <id> | sync history <id> | resolve sync <id> <resolution>[/red]")
+                    elif parts[1] == "vps":
+                        vps_id = int(parts[2])
+                        if "--pull" in parts:
+                            sync_vps(vps_id, pull=True)
+                        elif "--push" in parts:
+                            sync_vps(vps_id, push=True)
+                        elif "--force" in parts:
+                            sync_vps(vps_id, force=True)
+                        else:
+                            sync_vps(vps_id)
+                    elif parts[1] == "status":
+                        vps_id = int(parts[2])
+                        sync_status(vps_id)
+                    elif parts[1] == "history":
+                        vps_id = int(parts[2])
+                        sync_history(vps_id)
+                    else:
+                        console.print("[red]Unknown sync command. Usage: sync vps <id> | sync status <id> | sync history <id>[/red]")
+                except (IndexError, ValueError):
+                    console.print("[red]Usage: sync vps <id> | sync status <id> | sync history <id>[/red]")
+            elif command.lower().startswith("resolve"):
+                try:
+                    parts = command.split()
+                    if len(parts) < 4:
+                        console.print("[red]Usage: resolve sync <id> <resolution>[/red]")
+                    elif parts[1] == "sync":
+                        vps_id = int(parts[2])
+                        resolution = parts[3]
+                        resolve_sync_conflict(vps_id, resolution)
+                    else:
+                        console.print("[red]Unknown resolve command. Usage: resolve sync <id> <resolution>[/red]")
+                except (IndexError, ValueError):
+                    console.print("[red]Usage: resolve sync <id> <resolution>[/red]")
             else:
                 console.print(f"[red]Unknown command: {command}[/red]")
                 console.print("Type 'help' for available commands\n")
