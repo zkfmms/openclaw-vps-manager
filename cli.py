@@ -602,8 +602,9 @@ def sync_data(
     db_path: str = typer.Option(None, "--db-path", help="Local database path"),
     no_backup: bool = typer.Option(False, "--no-backup", help="Skip creating backup of skills directory"),
     workspace_dir: str = typer.Option("~/.openclaw/workspace", "--workspace-dir", help="Remote workspace directory"),
+    sync_type: str = typer.Option("tweets-skills", "--sync-type", help="What to sync: all, tweets, skills, config, tweets-skills"),
 ):
-    """Sync OpenClaw data from VPS instance (tweets, skills, etc)."""
+    """Sync OpenClaw data from VPS instance (selective sync)."""
     import subprocess
     import sys
 
@@ -622,6 +623,8 @@ def sync_data(
         cmd.append("--no-backup")
     if workspace_dir != "~/.openclaw/workspace":
         cmd.extend(["--workspace-dir", workspace_dir])
+    if sync_type != "tweets-skills":
+        cmd.extend(["--sync-type", sync_type])
 
     console.print(f"[bold]Starting data sync from {hostname}...[/bold]")
     console.print(f"Script: {script_path}")
