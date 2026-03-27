@@ -558,3 +558,117 @@ def get_git_manager() -> GitManager:
     if _git_manager is None:
         _git_manager = GitManager()
     return _git_manager
+
+
+class UnifiedTweetDB:
+    """Unified database for tweet data management."""
+
+    def __init__(self, db_path: Path):
+        """Initialize unified tweet database."""
+        self.db_path = db_path
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        """Ensure database schema exists."""
+        import sqlite3
+
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+
+        # Create unified tweets table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tweets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                tweet_id TEXT UNIQUE,
+                created_at TEXT,
+                text TEXT,
+                user TEXT,
+                impressions INTEGER,
+                likes INTEGER,
+                retweets INTEGER,
+                replies INTEGER,
+                scraped_at TEXT,
+                source TEXT
+            );
+        """)
+
+        # Create indexes for efficient queries
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tweets_type ON tweets(type);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tweets_created_at ON tweets(created_at DESC);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tweets_tweet_id ON tweets(tweet_id);")
+
+        conn.commit()
+        conn.close()
+
+    def insert_tweet(self, tweet_type: str, tweet_data: dict, source: str = "ssot") -> int:
+        """
+        Insert a tweet into a unified database.
+
+        Args:
+            tweet_type: Type of tweet ('my_tweet', 'reply', 'search_result').
+            tweet_data: Tweet data dictionary.
+            source: Data source identifier (SSOT SRC or other).
+
+        Returns:
+            Tweet ID in database.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO tweets (
+                type, tweet_id, created_at, text, user,
+                impressions, likes, retweets, replies, scraped_at, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            tweet_type,
+            tweet_data.get('id'),
+            tweet_data.get('created_at'),
+            tweet_data.get('text', ''),
+            tweet_data.get('user', ''),
+            tweet_data.get('impressions', 0),
+            tweet_data.get('likes', 0),
+            tweet_data.get('retweets', 0),
+            tweet_data.get('replies', 0),
+            tweet_data.get('scraped_at'),
+            source
+        ))
+
+        conn.commit()
+        tweet_id = cursor.lastrowid
+        conn.close()
+
+        return tweet_id
+
+    def get_stats(self) -> dict:
+        """
+        Get statistics from the unified database.
+
+        Returns:
+            Dictionary with tweet statistics by type.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+
+        # Get counts by type
+        cursor.execute("""
+            SELECT type, COUNT(*) as count, MIN(created_at) as earliest, MAX(created_at) as latest
+            FROM tweets
+            GROUP BY type
+        """)
+
+        stats = {}
+        for row in cursor.fetchall():
+            stats[row[0]] = {
+                "count": row[1],
+                "earliest": row[2],
+                "latest": row[3]
+            }
+
+        conn.close()
+        return stats
