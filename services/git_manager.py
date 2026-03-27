@@ -16,21 +16,14 @@ settings = get_settings()
 class GitManager:
     """Service for managing Git-based configuration repository."""
 
-    def __init__(self, repo_path: Optional[Path] = None, vps_id: Optional[int] = None):
+    def __init__(self, repo_path: Optional[Path] = None):
         """
         Initialize Git manager.
 
         Args:
             repo_path: Path to Git repository. If None, uses configured path.
-            vps_id: Optional VPS ID for per-VPS repository mode.
         """
-        self.vps_id = vps_id
-        if vps_id is not None:
-            # Per-VPS repository mode
-            self.repo_path = Path(settings.git_repo_path) / f"vps-{vps_id}"
-        else:
-            # Legacy mode or other operations
-            self.repo_path = Path(repo_path) if repo_path else Path(settings.git_repo_path)
+        self.repo_path = Path(repo_path) if repo_path else Path(settings.git_repo_path)
         self.repo: Optional[Repo] = None
         self.encryption = get_encryption_service()
         self._initialize_repo()
@@ -47,16 +40,13 @@ class GitManager:
 
     def _create_base_structure(self) -> None:
         """Create base directory structure."""
-        directories = [
-            self.repo_path / "skills",
-            self.repo_path / "deployments",
-        ]
-        for directory in directories:
-            directory.mkdir(parents=True, exist_ok=True)
+        # Create main directory and skills subdirectory
+        main_dir = self.repo_path / "main"
+        skills_dir = main_dir / "skills"
+        deployments_dir = self.repo_path / "deployments"
 
-        # Create base template files
-        self._create_openclaw_template()
-        self._create_agents_template()
+        for directory in [main_dir, skills_dir, deployments_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
 
         # Create .gitignore to exclude sensitive files from Git
         self._create_gitignore()
@@ -241,14 +231,16 @@ coder:
     def update_vps_config(
         self,
         config: Dict[str, Any],
+        vps_id: int,
         user_id: int,
         commit_message: Optional[str] = None,
     ) -> str:
         """
-        Update VPS configuration in per-VPS repository.
+        Update VPS configuration in VPS-specific directory.
 
         Args:
             config: OpenClaw configuration dictionary.
+            vps_id: VPS ID for directory name.
             user_id: ID of user making the change.
             commit_message: Optional commit message.
 
@@ -258,9 +250,21 @@ coder:
         # Filter out sensitive information before saving
         filtered_config = self._filter_sensitive_config(config)
 
+        # Use VPS-specific directory if vps_id is set
+        if hasattr(self, 'vps_dir'):
+            target_dir = self.vps_dir
+        else:
+            # Fallback for legacy operations
+            target_dir = self.repo_path
+
+        # Ensure VPS directory exists
+        vps_dir_name = f"vps-{vps_id}"
+        vps_dir = self.repo_path / vps_dir_name
+        vps_dir.mkdir(parents=True, exist_ok=True)
+
         # Encrypt and save configuration
-        config_file = self.repo_path / "openclaw.json"
-        config_encrypted = self.repo_path / "openclaw.json.enc"
+        config_file = vps_dir / "openclaw.json"
+        config_encrypted = vps_dir / "openclaw.json.enc"
 
         # Save unencrypted version for local use only (excluded from Git by .gitignore)
         config_file.write_text(json.dumps(filtered_config, indent=2))
@@ -271,9 +275,11 @@ coder:
 
         # Commit changes (only add encrypted file to Git)
         if commit_message is None:
-            commit_message = f"Update configuration by user {user_id}"
+            commit_message = f"Update VPS {vps_id} configuration by user {user_id}"
 
-        self.repo.git.add(config_encrypted)
+        # Add file relative to repo root
+        file_to_add = config_encrypted.relative_to(self.repo_path)
+        self.repo.git.add(str(file_to_add))
         commit_hash = self.repo.index.commit(commit_message)
 
         return commit_hash.hexsha
@@ -537,27 +543,18 @@ coder:
         self.repo.index.commit(commit_message)
 
 
-# Global Git manager instances (can have multiple per-VPS instances)
-_git_managers: dict[int, GitManager] = {}
+# Global Git manager instance
+_git_manager: Optional[GitManager] = None
 
 
-def get_git_manager(vps_id: Optional[int] = None) -> GitManager:
+def get_git_manager() -> GitManager:
     """
-    Get or create Git manager instance.
-
-    Args:
-        vps_id: Optional VPS ID for per-VPS repository mode.
+    Get or create global Git manager instance.
 
     Returns:
-        Git manager instance.
+        Git manager instance for the main repository.
     """
-    if vps_id is not None:
-        # Per-VPS repository mode - create new instance
-        if vps_id not in _git_managers:
-            _git_managers[vps_id] = GitManager(vps_id=vps_id)
-        return _git_managers[vps_id]
-    else:
-        # Legacy mode - use global instance
-        if None not in _git_managers:
-            _git_managers[None] = GitManager()
-        return _git_managers[None]
+    global _git_manager
+    if _git_manager is None:
+        _git_manager = GitManager()
+    return _git_manager

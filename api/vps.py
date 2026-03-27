@@ -484,11 +484,14 @@ async def import_config_vps(
             from services.git_manager import get_git_manager
             from services.logging import log_audit_event
 
-            # Get per-VPS Git manager instance
-            git_manager = get_git_manager(vps_id=vps_id)
+            # Get global Git manager instance
+            git_manager = get_git_manager()
+
+            # Update VPS config in VPS-specific directory
             commit_hash = git_manager.update_vps_config(
                 config=import_result["config"],
                 user_id=current_user.id,
+                vps_id=vps_id,
                 commit_message=f"Import config from VPS {vps.hostname}",
             )
 
