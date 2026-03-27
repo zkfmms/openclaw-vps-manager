@@ -16,14 +16,21 @@ settings = get_settings()
 class GitManager:
     """Service for managing Git-based configuration repository."""
 
-    def __init__(self, repo_path: Optional[Path] = None):
+    def __init__(self, repo_path: Optional[Path] = None, vps_id: Optional[int] = None):
         """
         Initialize Git manager.
 
         Args:
             repo_path: Path to Git repository. If None, uses configured path.
+            vps_id: Optional VPS ID for per-VPS repository mode.
         """
-        self.repo_path = Path(repo_path) if repo_path else Path(settings.git_repo_path)
+        self.vps_id = vps_id
+        if vps_id is not None:
+            # Per-VPS repository mode
+            self.repo_path = Path(settings.git_repo_path) / f"vps-{vps_id}"
+        else:
+            # Legacy mode or other operations
+            self.repo_path = Path(repo_path) if repo_path else Path(settings.git_repo_path)
         self.repo: Optional[Repo] = None
         self.encryption = get_encryption_service()
         self._initialize_repo()
@@ -41,8 +48,7 @@ class GitManager:
     def _create_base_structure(self) -> None:
         """Create base directory structure."""
         directories = [
-            self.repo_path / "main",
-            self.repo_path / "main" / "skills",
+            self.repo_path / "skills",
             self.repo_path / "deployments",
         ]
         for directory in directories:
@@ -62,16 +68,16 @@ class GitManager:
 # Only encrypted versions (.enc) should be in the repository
 
 # Unencrypted JSON files (sensitive configs)
-customer-*/openclaw.json
-customer-*/openclaw.json.bak
-customer-*/openclaw.json.tmp
-**/openclaw.json
-**/openclaw.json.bak
-**/openclaw.json.tmp
+openclaw.json
+openclaw.json.bak
+openclaw.json.tmp
+*.json
+*.json.bak
+*.json.tmp
 
 # Keep encrypted versions
-!customer-*/openclaw.json.enc
-!**/openclaw.json.enc
+!openclaw.json.enc
+!*.json.enc
 
 # Temporary and backup files
 *.tmp
@@ -81,18 +87,18 @@ customer-*/openclaw.json.tmp
 *.swo
 
 # Backup SSH keys (should be in separate secure location)
-**/*.key.bak
-**/*.pem.bak
-**/id_ed25519.bak
-**/id_rsa.bak
+*.key.bak
+*.pem.bak
+id_ed25519.bak
+id_rsa.bak
 
-# Customer-specific secrets directories
-**/credentials/
-**/secrets/
-**/tokens/
-**/.credentials/
-**/.secrets/
-**/.tokens/
+# Secrets directories
+credentials/
+secrets/
+tokens/
+.credentials/
+.secrets/
+.tokens/
 
 # Log files
 *.log
@@ -232,18 +238,16 @@ coder:
 
         return branch_name
 
-    def update_customer_config(
+    def update_vps_config(
         self,
-        customer_id: int,
         config: Dict[str, Any],
         user_id: int,
         commit_message: Optional[str] = None,
     ) -> str:
         """
-        Update customer configuration.
+        Update VPS configuration in per-VPS repository.
 
         Args:
-            customer_id: Customer ID.
             config: OpenClaw configuration dictionary.
             user_id: ID of user making the change.
             commit_message: Optional commit message.
@@ -251,31 +255,95 @@ coder:
         Returns:
             Git commit hash.
         """
-        branch_name = settings.get_customer_branch(customer_id)
-
-        # Checkout customer branch
-        self.repo.git.checkout(branch_name)
+        # Filter out sensitive information before saving
+        filtered_config = self._filter_sensitive_config(config)
 
         # Encrypt and save configuration
-        customer_dir = self.repo_path / f"customer-{customer_id}"
-        config_file = customer_dir / "openclaw.json"
-        config_encrypted = customer_dir / "openclaw.json.enc"
+        config_file = self.repo_path / "openclaw.json"
+        config_encrypted = self.repo_path / "openclaw.json.enc"
 
         # Save unencrypted version for local use only (excluded from Git by .gitignore)
-        config_file.write_text(json.dumps(config, indent=2))
+        config_file.write_text(json.dumps(filtered_config, indent=2))
 
         # Save encrypted version to Git
-        encrypted_config = self.encryption.encrypt_dict(config)
+        encrypted_config = self.encryption.encrypt_dict(filtered_config)
         config_encrypted.write_text(encrypted_config)
 
         # Commit changes (only add encrypted file to Git)
         if commit_message is None:
-            commit_message = f"Update configuration for customer {customer_id} by user {user_id}"
+            commit_message = f"Update configuration by user {user_id}"
 
         self.repo.git.add(config_encrypted)
         commit_hash = self.repo.index.commit(commit_message)
 
         return commit_hash.hexsha
+
+    def _filter_sensitive_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter out sensitive information from configuration.
+
+        This removes tokens, API keys, and other secrets that should not be
+        committed to the Git repository, while preserving the configuration structure.
+
+        Args:
+            config: Original configuration dictionary.
+
+        Returns:
+            Filtered configuration dictionary with sensitive fields removed.
+        """
+        filtered = {}
+        sensitive_patterns = [
+            'token',
+            'apiKey',
+            'api_key',
+            'secret',
+            'password',
+            'credential',
+        ]
+
+        for key, value in config.items():
+            if key == 'channels':
+                # Filter channel tokens
+                filtered[key] = self._filter_sensitive_fields(value, sensitive_patterns)
+            elif key == 'gateway':
+                # Filter gateway auth tokens
+                filtered[key] = self._filter_sensitive_fields(value, sensitive_patterns)
+            elif key == 'secrets':
+                # Skip entire secrets section
+                continue
+            else:
+                # Keep other sections as-is
+                filtered[key] = value
+
+        return filtered
+
+    def _filter_sensitive_fields(self, data: Any, patterns: List[str]) -> Any:
+        """
+        Recursively filter sensitive fields from a data structure.
+
+        Args:
+            data: Data structure to filter (dict, list, or primitive).
+            patterns: List of field names to filter out.
+
+        Returns:
+            Filtered data structure.
+        """
+        if isinstance(data, dict):
+            filtered = {}
+            for key, value in data.items():
+                if any(pattern in key.lower() for pattern in patterns):
+                    # Skip sensitive field
+                    continue
+                elif isinstance(value, (dict, list)):
+                    # Recursively filter nested structures
+                    filtered[key] = self._filter_sensitive_fields(value, patterns)
+                else:
+                    filtered[key] = value
+            return filtered
+        elif isinstance(data, list):
+            return [self._filter_sensitive_fields(item, patterns) for item in data]
+        else:
+            return data
 
     def get_customer_config(self, customer_id: int) -> Dict[str, Any]:
         """
@@ -469,13 +537,27 @@ coder:
         self.repo.index.commit(commit_message)
 
 
-# Global Git manager instance
-_git_manager: Optional[GitManager] = None
+# Global Git manager instances (can have multiple per-VPS instances)
+_git_managers: dict[int, GitManager] = {}
 
 
-def get_git_manager() -> GitManager:
-    """Get or create global Git manager instance."""
-    global _git_manager
-    if _git_manager is None:
-        _git_manager = GitManager()
-    return _git_manager
+def get_git_manager(vps_id: Optional[int] = None) -> GitManager:
+    """
+    Get or create Git manager instance.
+
+    Args:
+        vps_id: Optional VPS ID for per-VPS repository mode.
+
+    Returns:
+        Git manager instance.
+    """
+    if vps_id is not None:
+        # Per-VPS repository mode - create new instance
+        if vps_id not in _git_managers:
+            _git_managers[vps_id] = GitManager(vps_id=vps_id)
+        return _git_managers[vps_id]
+    else:
+        # Legacy mode - use global instance
+        if None not in _git_managers:
+            _git_managers[None] = GitManager()
+        return _git_managers[None]

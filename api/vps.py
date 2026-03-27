@@ -8,6 +8,7 @@ from sqlalchemy import select, update, delete
 from pydantic import BaseModel, Field
 
 from database import get_db, VPSServer, VPSStatus, Deployment, DeploymentStatus
+from services.git_manager import GitManager
 from auth.middleware import get_current_user
 from auth.rbac import require_permission, Permission, check_customer_access
 from services.ssh_manager import get_ssh_pool, SSHKeyManager
@@ -411,4 +412,108 @@ async def health_check_vps(
         vps_id=vps.id,
         **health,
         timestamp=health.get("timestamp", ""),
+    )
+
+
+class ImportConfigResponse(BaseModel):
+    """Response model for config import."""
+    vps_id: int
+    success: bool
+    config: Optional[dict] = None
+    error: Optional[str] = None
+    warnings: List[str] = []
+    metadata: Optional[dict] = None
+
+
+@router.get("/{vps_id}/import-config", response_model=ImportConfigResponse)
+async def import_config_vps(
+    vps_id: int,
+    save_to_git: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Import OpenClaw configuration from existing VPS instance.
+
+    This reads the OpenClaw configuration file from the VPS and optionally
+    saves it to the Git repository for central management.
+
+    Args:
+        vps_id: VPS server ID.
+        save_to_git: If True, save imported config to Git repository.
+
+    Returns:
+        Imported configuration and status.
+    """
+    # Get VPS
+    result = await db.execute(select(VPSServer).where(VPSServer.id == vps_id))
+    vps = result.scalar_one_or_none()
+
+    if not vps:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="VPS not found",
+        )
+
+    # Check customer access
+    if not check_customer_access(current_user.customer_id, vps.customer_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot access this customer's resources",
+        )
+
+    # Import configuration from VPS
+    openclaw_manager = get_openclaw_manager()
+    import_result = await openclaw_manager.import_config(
+        hostname=vps.hostname,
+        username=vps.ssh_user,
+        key_path=Path(vps.ssh_key_path),
+        port=22,
+    )
+
+    if not import_result["success"]:
+        return ImportConfigResponse(
+            vps_id=vps.id,
+            success=False,
+            error=import_result.get("error"),
+            warnings=import_result.get("warnings", []),
+        )
+
+    # Optionally save to Git
+    if save_to_git:
+        try:
+            from services.git_manager import get_git_manager
+            from services.logging import log_audit_event
+
+            # Get per-VPS Git manager instance
+            git_manager = get_git_manager(vps_id=vps_id)
+            commit_hash = git_manager.update_vps_config(
+                config=import_result["config"],
+                user_id=current_user.id,
+                commit_message=f"Import config from VPS {vps.hostname}",
+            )
+
+            # Log audit event
+            log_audit_event(
+                user_id=current_user.id,
+                action="import_config",
+                resource_type="vps",
+                resource_id=vps_id,
+                details={
+                    "hostname": vps.hostname,
+                    "commit_hash": commit_hash,
+                    "save_to_git": True,
+                },
+            )
+
+        except Exception as e:
+            # Continue even if Git save fails
+            import_result["warnings"].append(f"Failed to save to Git: {str(e)}")
+
+    return ImportConfigResponse(
+        vps_id=vps.id,
+        success=import_result["success"],
+        config=import_result.get("config"),
+        error=import_result.get("error"),
+        warnings=import_result.get("warnings", []),
+        metadata=import_result.get("metadata"),
     )

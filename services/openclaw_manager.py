@@ -62,7 +62,7 @@ class OpenClawManager:
             # Create systemd service directory
             "sudo mkdir -p /etc/systemd/system",
 
-            echo "OpenClaw installation completed"
+            "echo 'OpenClaw installation completed'"
         ]
 
         command = " && ".join(commands)
@@ -369,6 +369,91 @@ EOF
         command_result = await self.ssh_pool.execute(hostname, username, key_path, command, timeout=60, port=port)
 
         return command_result
+
+    async def import_config(
+        self,
+        hostname: str,
+        username: str,
+        key_path: Path,
+        port: int = 22,
+    ) -> Dict[str, Any]:
+        """
+        Import OpenClaw configuration from existing VPS instance.
+
+        Args:
+            hostname: Target hostname.
+            username: SSH username.
+            key_path: Path to SSH key.
+            port: SSH port.
+
+        Returns:
+            Dictionary with imported configuration and status.
+        """
+        result = {
+            "success": False,
+            "config": None,
+            "error": None,
+            "warnings": [],
+        }
+
+        try:
+            # Check if OpenClaw config exists
+            check_result = await self.ssh_pool.execute(
+                hostname, username, key_path,
+                "test -f ~/.openclaw/openclaw.json && echo 'EXISTS' || echo 'NOT_FOUND'",
+                timeout=10,
+                port=port,
+            )
+
+            if "NOT_FOUND" in check_result.stdout:
+                result["error"] = "OpenClaw configuration file not found on VPS"
+                result["warnings"].append("OpenClaw may not be installed on this VPS")
+                return result
+
+            # Read the configuration file
+            read_result = await self.ssh_pool.execute(
+                hostname, username, key_path,
+                "cat ~/.openclaw/openclaw.json",
+                timeout=10,
+                port=port,
+            )
+
+            if read_result.exit_code != 0:
+                result["error"] = f"Failed to read config: {read_result.stderr}"
+                return result
+
+            # Parse JSON configuration
+            try:
+                config = json.loads(read_result.stdout)
+                result["success"] = True
+                result["config"] = config
+
+                # Add metadata
+                result["metadata"] = {
+                    "imported_from": hostname,
+                    "file_size": len(read_result.stdout),
+                    "has_agents_config": "agents" in config,
+                    "has_gateway_config": "gateway" in config,
+                    "has_channels_config": "channels" in config,
+                    "has_commands_config": "commands" in config,
+                    "has_skills_config": "skills" in config,
+                }
+
+                # Validate configuration structure
+                if "agents" not in config:
+                    result["warnings"].append("Agents configuration section is missing (expected 'agents', not 'agent')")
+                if "gateway" not in config:
+                    result["warnings"].append("Gateway configuration section is missing")
+
+                return result
+
+            except json.JSONDecodeError as e:
+                result["error"] = f"Invalid JSON in config file: {str(e)}"
+                return result
+
+        except Exception as e:
+            result["error"] = f"Unexpected error during import: {str(e)}"
+            return result
 
 
 # Global OpenClaw manager instance

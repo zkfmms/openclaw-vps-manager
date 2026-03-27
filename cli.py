@@ -12,7 +12,6 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
-from rich.json import RichJsonEncoder
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 # Import config
@@ -44,7 +43,7 @@ def format_output(data, format_type: str = None):
     fmt = format_type or output_format
 
     if fmt == "json":
-        console.print_json(json.dumps(data, cls=RichJsonEncoder))
+        console.print_json(data)
         return True
     elif fmt == "yaml":
         console.print(yaml.dump(data, default_flow_style=False))
@@ -417,6 +416,72 @@ def list_audit_logs(
             console.print(table)
 
     asyncio.run(_list_audit_logs())
+
+
+@app.command()
+def import_config(
+    vps_id: int,
+    save: bool = typer.Option(False, "--save", "-s", help="Save imported config to Git repository"),
+):
+    """Import OpenClaw configuration from existing VPS instance.
+
+    This reads the OpenClaw configuration file from the VPS and optionally
+    saves it to the Git repository for central management.
+    """
+    async def _import_config():
+        config = get_config()
+        params = {}
+        if save:
+            params["save_to_git"] = True
+
+        log_verbose(f"Importing config from VPS {vps_id}, save_to_git={save}")
+
+        async with get_client(config) as client:
+            with console.status(f"[bold yellow]Importing config from VPS {vps_id}..."):
+                response = await client.get(f"/api/v1/vps/{vps_id}/import-config", params=params)
+
+        if response.status_code == 200:
+            data = response.json()
+            status_icon = "✓" if data["success"] else "✗"
+            console.print(f"[bold]Config import {status_icon} {data['success'] and 'successful' or 'failed'}[/bold]")
+
+            if data["success"] and data.get("config"):
+                console.print(f"[green]Configuration imported successfully[/green]")
+                log_quiet("Configuration imported successfully")
+
+                if data.get("metadata"):
+                    metadata = data["metadata"]
+                    console.print(f"  Imported from: {metadata.get('imported_from', 'N/A')}")
+                    console.print(f"  File size: {metadata.get('file_size', 0)} bytes")
+                    console.print(f"  Has agents config: {metadata.get('has_agents_config', False)}")
+                    console.print(f"  Has gateway config: {metadata.get('has_gateway_config', False)}")
+                    console.print(f"  Has channels config: {metadata.get('has_channels_config', False)}")
+                    console.print(f"  Has commands config: {metadata.get('has_commands_config', False)}")
+                    console.print(f"  Has skills config: {metadata.get('has_skills_config', False)}")
+
+                if save:
+                    console.print(f"[cyan]Config saved to Git repository[/cyan]")
+                    log_quiet("Config saved to Git repository")
+
+                if data.get("warnings"):
+                    console.print(f"[yellow]Warnings:[/yellow]")
+                    for warning in data["warnings"]:
+                        console.print(f"  ⚠️  {warning}")
+                        log_verbose(f"Warning: {warning}")
+
+                if data.get("config") and output_format == "table" and not quiet:
+                    console.print(Panel.from_dict(data["config"], title="[bold green]Imported Configuration", border_style="green"))
+            else:
+                error_msg = data.get("error", "Unknown error")
+                console.print(f"[red]Import failed: {error_msg}[/red]")
+                if data.get("warnings"):
+                    for warning in data.get("warnings", []):
+                        console.print(f"[yellow]Warning: {warning}[/yellow]")
+        else:
+            console.print(f"[red]Import failed: {response.status_code}[/red]")
+            console.print(response.text)
+
+    asyncio.run(_import_config())
 
 
 @app.command()
