@@ -62,6 +62,10 @@ tokens/
 *.db
 *.sqlite
 
+# Backup directories (exclude from git)
+openclaw-backup*/
+*-backup-*
+
 # Git
 .git/
 .gitignore
